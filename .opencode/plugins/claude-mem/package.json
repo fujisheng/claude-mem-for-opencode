@@ -1,0 +1,36 @@
+{
+  "name": "claude-mem-opencode",
+  "version": "1.0.0",
+  "description": "Claude-Mem for OpenCode - Persistent memory plugin compatible with claude-mem",
+  "main": "src/index.ts",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "lint": "eslint src/**/*.ts",
+    "typecheck": "tsc --noEmit",
+    "contract-check": "bun scripts/contract-check.ts"
+  },
+  "keywords": [
+    "opencode",
+    "claude-mem",
+    "memory",
+    "ai",
+    "plugin"
+  ],
+  "author": "",
+  "license": "AGPL-3.0",
+  "dependencies": {
+    "@opencode-ai/plugin": "^1.0.0",
+    "hono": "^4.0.0",
+    "zod": "^3.22.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.0"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  }
+}

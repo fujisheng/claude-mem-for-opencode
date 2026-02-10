@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Build outputs
+dist/
+*.js.map
+*.d.ts
+
+# Data directories (user-specific)
+.claude-mem/
+~/.claude-mem/
+
+# Logs
+logs/
+*.log
+
+# Upstream code (will be cloned by install script)
+vendor/claude-mem/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+tmp/
+temp/
+*.tmp

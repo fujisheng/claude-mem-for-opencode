@@ -1,0 +1,25 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": [
+    "./.opencode/plugins/claude-mem"
+  ],
+  "mcp": {
+    "mem-search": {
+      "type": "local",
+      "command": [
+        "node",
+        ".opencode/skills/mem-search/bootstrap.cjs"
+      ],
+      "env": {
+        "CLAUDE_MEM_WORKER_HOST": "127.0.0.1",
+        "CLAUDE_MEM_WORKER_PORT": "37777"
+      },
+      "enabled": true
+    }
+  },
+  "permission": {
+    "skill": {
+      "*": "allow"
+    }
+  }
+}
