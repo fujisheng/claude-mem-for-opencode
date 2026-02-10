@@ -1,10 +1,11 @@
 # AI 安装指令 - Claude-Mem for OpenCode
 
-> **指令目标**：让 AI 能够自动为用户安装和配置 claude-mem 插件
+> **仓库地址**：https://github.com/fujisheng/claude-mem-for-opencode.git
+> **作用**：指导 AI 一步一步完成插件安装和配置
 
 ---
 
-## 🎯 执行指令
+## 🎯 触发条件
 
 当用户说以下任意一句话时，执行本安装流程：
 
@@ -13,43 +14,68 @@
 - "配置 claude-mem"
 - "setup claude-mem"
 - "我想使用记忆功能"
+- "请从 https://github.com/fujisheng/claude-mem-for-opencode.git 安装 claude-mem 插件"
 
 ---
 
-## 📋 前置检查
+## 🚀 安装步骤（按顺序执行）
 
-在执行安装前，请先确认：
+### 步骤 1：环境检查
 
-1. **用户是否已经克隆了本仓库？**
-   - 检查当前工作目录下是否存在 `.opencode/plugins/claude-mem/`
-   - 如果不存在，提示用户先克隆仓库
-
-2. **Node.js 是否已安装？**
-   ```bash
-   node --version  # 需要 >= 18.0.0
-   ```
-
-3. **Git 是否已安装？**
-   ```bash
-   git --version
-   ```
-
----
-
-## 🚀 安装步骤
-
-### 步骤 1：读取配置信息
-
-读取本文件所在目录的配置：
-```
-读取文件: .opencode/plugins/claude-mem/.opencode/claude-mem-setup.yaml
-```
-
-### 步骤 2：安装上游依赖
-
-执行自动安装脚本：
+**1.1 检查 Node.js 版本**
 ```bash
-cd .opencode/plugins/claude-mem/.opencode
+node --version
+```
+要求：>= 18.0.0
+
+**1.2 检查 Git**
+```bash
+git --version
+```
+要求：已安装
+
+如果缺少依赖，提示用户安装后再继续。
+
+---
+
+### 步骤 2：克隆仓库
+
+**2.1 检查是否已存在**
+```bash
+if [ -d ".opencode/plugins/claude-mem-for-opencode" ]; then
+  echo "插件目录已存在，更新代码..."
+  cd .opencode/plugins/claude-mem-for-opencode
+  git pull origin main
+else
+  echo "创建目录并克隆..."
+  mkdir -p .opencode/plugins
+  git clone https://github.com/fujisheng/claude-mem-for-opencode.git .opencode/plugins/claude-mem-for-opencode
+fi
+```
+
+**2.2 进入插件目录**
+```bash
+cd .opencode/plugins/claude-mem-for-opencode
+```
+
+---
+
+### 步骤 3：安装插件依赖
+
+在插件目录执行：
+```bash
+npm install
+```
+
+这会安装插件运行所需的依赖包。
+
+---
+
+### 步骤 4：安装上游 claude-mem
+
+**4.1 执行安装脚本**
+```bash
+cd doc
 node install-upstream.cjs
 ```
 
@@ -64,14 +90,14 @@ node install-upstream.cjs
 1. 检查错误信息
 2. 尝试手动安装：
    ```bash
-   cd .opencode/plugins/claude-mem/vendor
+   cd .opencode/plugins/claude-mem-for-opencode/vendor
    git clone https://github.com/thedotmack/claude-mem.git
    cd claude-mem
    npm install
    npm run build
    ```
 
-### 步骤 3：配置 OpenCode
+### 步骤 5：配置 OpenCode
 
 检查项目根目录是否存在 `opencode.json`：
 
@@ -81,7 +107,7 @@ node install-upstream.cjs
 {
   "$schema": "https://opencode.ai/config.json",
   "plugin": [
-    "./.opencode/plugins/claude-mem"
+    "./.opencode/plugins/claude-mem-for-opencode"
   ],
   "mcp": {
     "mem-search": {
@@ -90,7 +116,7 @@ node install-upstream.cjs
         "node",
         ".opencode/skills/mem-search/bootstrap.cjs"
       ],
-      "env": {
+      "environment": {
         "CLAUDE_MEM_WORKER_HOST": "127.0.0.1",
         "CLAUDE_MEM_WORKER_PORT": "37777"
       },
@@ -105,40 +131,71 @@ node install-upstream.cjs
 
 1. 在 `plugin` 数组中添加：
    ```json
-   "./.opencode/plugins/claude-mem"
+   "./.opencode/plugins/claude-mem-for-opencode"
    ```
 
 2. 在 `mcp` 对象中添加：
    ```json
-   "mem-search": {
-     "type": "local",
-     "command": [
-       "node",
-       ".opencode/skills/mem-search/bootstrap.cjs"
-     ],
-     "env": {
-       "CLAUDE_MEM_WORKER_HOST": "127.0.0.1",
-       "CLAUDE_MEM_WORKER_PORT": "37777"
-     },
-     "enabled": true
-   }
-   ```
+    "mem-search": {
+      "type": "local",
+      "command": [
+        "node",
+        ".opencode/skills/mem-search/bootstrap.cjs"
+      ],
+      "environment": {
+        "CLAUDE_MEM_WORKER_HOST": "127.0.0.1",
+        "CLAUDE_MEM_WORKER_PORT": "37777"
+      },
+      "enabled": true
+    }
+    ```
 
-### 步骤 4：验证配置
+---
+
+### 步骤 6：创建 MCP Skill 配置
+
+**直接复制 skill 文件夹到正确位置：**
+
+```bash
+# 创建父目录
+mkdir -p .opencode/skills
+
+# 复制整个 skill/mem-search 文件夹
+cp -r .opencode/plugins/claude-mem-for-opencode/skill/mem-search .opencode/skills/
+```
+
+**或者使用 Windows 命令：**
+```powershell
+# PowerShell
+New-Item -ItemType Directory -Force -Path .opencode\skills
+Copy-Item -Recurse -Force .opencode\plugins\claude-mem-for-opencode\skill\mem-search .opencode\skills\
+```
+
+复制后，skill 目录结构应该是：
+```
+.opencode/skills/mem-search/
+├── bootstrap.cjs      # MCP 启动脚本
+├── mcp.json           # MCP 配置
+└── SKILL.md           # Skill 文档
+```
+
+### 步骤 7：验证配置
 
 检查 `opencode.json` 是否有效：
 - 确保 JSON 格式正确
-- 确保路径 `./.opencode/plugins/claude-mem` 存在
+- 确保路径 `./.opencode/plugins/claude-mem-for-opencode` 存在
 - 确保 `mcp.json` 路径正确
 
-### 步骤 5：最终验证
+### 步骤 8：最终验证
 
 验证以下文件是否存在：
-- ✅ `.opencode/plugins/claude-mem/src/index.ts`
-- ✅ `.opencode/plugins/claude-mem/vendor/claude-mem/plugin/scripts/worker-service.cjs`
-- ✅ `.opencode/plugins/claude-mem/vendor/claude-mem/plugin/scripts/mcp-server.cjs`
-- ✅ `.opencode/skills/mem-search/bootstrap.cjs`
-- ✅ `.opencode/skills/mem-search/mcp.json`
+- ✅ `.opencode/plugins/claude-mem-for-opencode/src/index.ts` (插件源码)
+- ✅ `.opencode/plugins/claude-mem-for-opencode/vendor/claude-mem/plugin/scripts/worker-service.cjs` (Worker 服务)
+- ✅ `.opencode/plugins/claude-mem-for-opencode/vendor/claude-mem/plugin/scripts/mcp-server.cjs` (MCP 服务器)
+- ✅ `.opencode/skills/mem-search/bootstrap.cjs` (启动脚本)
+- ✅ `.opencode/skills/mem-search/mcp.json` (Skill 配置)
+- ✅ `.opencode/skills/mem-search/SKILL.md` (Skill 文档) ⭐
+- ✅ `opencode.json` (OpenCode 主配置)
 
 ---
 
@@ -170,21 +227,25 @@ node install-upstream.cjs
 
 ---
 
-## 🔄 更新指令
+## 🔄 更新插件
 
-当用户要求更新上游代码时：
+当用户要求更新时：
 
-1. **执行更新脚本**：
-   ```bash
-   cd .opencode/plugins/claude-mem/.opencode
-   node update-upstream.cjs
-   ```
+```bash
+# 1. 拉取最新代码
+cd .opencode/plugins/claude-mem-for-opencode
+git pull origin main
 
-2. **通知用户重启**：
-   ```
-   ✅ 上游代码已更新！
-   ⚠️  请重启 OpenCode 以使用新版本。
-   ```
+# 2. 更新依赖
+npm install
+
+# 3. 更新上游
+cd doc
+node update-upstream.cjs
+
+# 4. 通知用户重启
+echo "✅ 更新完成！请重启 OpenCode 以使用新版本。"
+```
 
 ---
 
@@ -206,12 +267,12 @@ node install-upstream.cjs
 
 2. 检查上游是否正确安装：
    ```bash
-   ls .opencode/plugins/claude-mem/vendor/claude-mem/plugin/scripts/
+   ls .opencode/plugins/claude-mem-for-opencode/vendor/claude-mem/plugin/scripts/
    ```
 
 3. 重新安装：
    ```bash
-   cd .opencode/plugins/claude-mem/.opencode
+   cd .opencode/plugins/claude-mem-for-opencode/doc
    node install-upstream.cjs
    ```
 
@@ -236,7 +297,7 @@ node install-upstream.cjs
 **解决方案**：
 1. 清理并重新安装：
    ```bash
-   cd .opencode/plugins/claude-mem/vendor/claude-mem
+   cd .opencode/plugins/claude-mem-for-opencode/vendor/claude-mem
    rm -rf node_modules package-lock.json
    npm install
    npm run build
@@ -281,10 +342,8 @@ node install-upstream.cjs
 
 ## 🔗 相关文件
 
-- **安装配置**：`.opencode/plugins/claude-mem/.opencode/claude-mem-setup.yaml`
-- **安装脚本**：`.opencode/plugins/claude-mem/.opencode/install-upstream.cjs`
-- **更新脚本**：`.opencode/plugins/claude-mem/.opencode/update-upstream.cjs`
-- **AI 手册**：`.opencode/plugins/claude-mem/.opencode/AI-EXECUTION-GUIDE.md`
+- **安装脚本**：`.opencode/plugins/claude-mem-for-opencode/doc/install-upstream.cjs`
+- **更新脚本**：`.opencode/plugins/claude-mem-for-opencode/doc/update-upstream.cjs`
 - **MCP 配置**：`.opencode/skills/mem-search/mcp.json`
 
 ---
@@ -293,12 +352,12 @@ node install-upstream.cjs
 
 本插件采用双层架构：
 
-1. **OpenCode 适配层** (`src/`)
+1. **OpenCode 适配层** (`claude-mem-for-opencode/src/`)
    - 事件钩子（session.created, tool.execute 等）
    - MCP 工具定义
    - Worker 管理
 
-2. **上游 Worker** (`vendor/claude-mem/`)
+2. **上游 Worker** (`claude-mem-for-opencode/vendor/claude-mem/`)
    - HTTP API 服务（端口 37777）
    - AI 处理
    - SQLite 存储

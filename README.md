@@ -10,7 +10,7 @@
 请从 https://github.com/fujisheng/claude-mem-for-opencode.git 安装 claude-mem 插件
 ```
 
-AI 会读取 [AI-INSTALL.md](./AI-INSTALL.md) 并自动完成所有配置（克隆、安装、配置、验证），无需手动操作！
+AI 会读取 [doc/install-for-ai.md](./doc/install-for-ai.md) 并自动完成所有配置（克隆、安装、配置、验证），无需手动操作！
 
 ---
 
@@ -39,7 +39,7 @@ AI 会读取 [AI-INSTALL.md](./AI-INSTALL.md) 并自动完成所有配置（克�
 4. 根据提示重启 OpenCode
 
 **AI 会自动执行：**
-- ✅ 克隆本仓库到 `.opencode/plugins/claude-mem/`
+- ✅ 克隆本仓库到 `.opencode/plugins/claude-mem-for-opencode/`
 - ✅ 安装上游 claude-mem
 - ✅ 配置 opencode.json
 - ✅ 验证安装
@@ -50,10 +50,10 @@ AI 会读取 [AI-INSTALL.md](./AI-INSTALL.md) 并自动完成所有配置（克�
 
 ```bash
 # 1. 克隆仓库
-git clone https://github.com/fujisheng/claude-mem-for-opencode.git .opencode/plugins/claude-mem
+git clone https://github.com/fujisheng/claude-mem-for-opencode.git .opencode/plugins/claude-mem-for-opencode
 
 # 2. 安装上游依赖
-cd .opencode/plugins/claude-mem/.opencode
+cd .opencode/plugins/claude-mem-for-opencode/doc
 node install-upstream.cjs
 
 # 3. 配置 OpenCode（详见下方配置章节）
@@ -100,7 +100,7 @@ AI 会自动在 \`opencode.json\` 中添加：
 ```json
 {
   "plugin": [
-    "./.opencode/plugins/claude-mem"
+    "./.opencode/plugins/claude-mem-for-opencode"
   ],
   "mcp": {
     "mem-search": {
@@ -109,7 +109,7 @@ AI 会自动在 \`opencode.json\` 中添加：
         "node",
         ".opencode/skills/mem-search/bootstrap.cjs"
       ],
-      "env": {
+      "environment": {
         "CLAUDE_MEM_WORKER_HOST": "127.0.0.1",
         "CLAUDE_MEM_WORKER_PORT": "37777"
       },
@@ -156,7 +156,7 @@ AI 会自动在 \`opencode.json\` 中添加：
 
 或手动执行：
 ```bash
-cd .opencode/plugins/claude-mem/.opencode
+cd .opencode/plugins/claude-mem-for-opencode/doc
 node update-upstream.cjs
 ```
 
@@ -168,19 +168,22 @@ node update-upstream.cjs
 
 ```
 .
-├── .opencode/
-│   ├── plugins/
-│   │   └── claude-mem/              # 本插件代码
-│   │       ├── src/                  # TypeScript 源码
-│   │       ├── .opencode/            # 安装脚本
-│   │       └── vendor/               # 上游代码（自动克隆）
-│   │           └── claude-mem/       # 原始 claude-mem
-│   └── skills/
-│       └── mem-search/               # MCP Skill 配置
-│           ├── bootstrap.cjs         # MCP 启动脚本
-│           └── mcp.json              # MCP 配置
-├── opencode.json                     # OpenCode 主配置（自动创建）
-└── README.md
+├── doc/                              # 安装脚本和文档
+│   ├── install-for-ai.md             # AI 安装指令
+│   ├── install-upstream.cjs          # 上游安装脚本
+│   ├── update-upstream.cjs           # 更新脚本
+│   └── ...
+├── src/                              # TypeScript 源码
+│   ├── index.ts                      # 插件主入口
+│   ├── services/                     # 服务层
+│   ├── storage/                      # 存储层
+│   └── types/                        # 类型定义
+├── vendor/                           # 上游代码（自动克隆，GitHub 上无此目录）
+│   └── claude-mem/                   # 原始 claude-mem
+├── LICENSE
+├── README.md
+├── package.json
+└── tsconfig.json
 ```
 
 ---
@@ -201,7 +204,7 @@ node update-upstream.cjs
 
 3. 重新安装：
    ```bash
-   node .opencode/plugins/claude-mem/.opencode/install-upstream.cjs
+   node .opencode/plugins/claude-mem-for-opencode/doc/install-upstream.cjs
    ```
 
 ### 端口冲突
@@ -230,7 +233,7 @@ node update-upstream.cjs
 ### 构建插件
 
 ```bash
-cd .opencode/plugins/claude-mem
+cd .opencode/plugins/claude-mem-for-opencode
 npm install
 npm run build
 ```
