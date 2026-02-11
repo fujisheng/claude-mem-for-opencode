@@ -201,8 +201,8 @@ async function initializeWorker(): Promise<void>
 	state.worker = new UpstreamWorkerManager({
 		scriptPath,
 		preferredPort: 37777,
-		enablePortFallback: true,
-		startupTimeoutMs: 10000,
+		enablePortFallback: false,  // 禁用端口回退，强制使用 37777
+		startupTimeoutMs: 30000,   // 增加到 30 秒，给清理进程更多时间
 	});
 
 	await state.worker.ensureStarted({ startupTimeoutMs: 3000 });
@@ -360,20 +360,59 @@ export const ClaudeMemPlugin: Plugin = async ({ directory }) =>
 				return;
 			}
 
+			await state.worker.ensureStarted({ startupTimeoutMs: 10000 });
+			await state.worker.waitUntilReady(10000);
+
+			// 主注入机制：首次消息时以 synthetic part 注入历史记忆上下文
+			// 参考 supermemory 插件的验证模式，比 system.transform 更可靠
+			if (!state.injectedSessionIds.has(input.sessionID))
+			{
+				try
+				{
+					var project = getProjectName(directory);
+					var contextUrl = `${state.worker.getBaseUrl()}/api/context/inject?projects=${encodeURIComponent(project)}`;
+					var contextRes = await fetchTextWithTimeout(contextUrl, 5000);
+
+					if (contextRes.ok)
+					{
+						if (contextRes.text.trim().length > 0)
+						{
+							output.parts.unshift({
+								id: `claude-mem-context-${Date.now()}`,
+								sessionID: input.sessionID,
+								messageID: output.message.id,
+								type: "text",
+								text: `<claude-mem-context>\n${contextRes.text.trim()}\n</claude-mem-context>`,
+								synthetic: true,
+							} as any);
+						}
+						state.injectedSessionIds.add(input.sessionID);
+					}
+					else
+					{
+						console.error(`[claude-mem] 上下文注入失败 (chat.message): status=${contextRes.status}`);
+					}
+				}
+				catch (err)
+				{
+					console.error(`[claude-mem] 上下文注入异常 (chat.message):`, err);
+				}
+			}
+
+			// 会话初始化：记录用户 prompt 到 claude-mem 数据库
 			var prompt = extractTextFromParts(output.parts);
-			var project = getProjectName(directory);
+			var projectName = getProjectName(directory);
 
 			await postJsonWithTimeout(
 				`${state.worker.getBaseUrl()}/api/sessions/init`,
 				{
 					contentSessionId: input.sessionID,
-					project,
+					project: projectName,
 					prompt: prompt && prompt.trim().length > 0 ? prompt : "[media prompt]",
 				},
 				2000
 			);
 		},
-
 		"experimental.chat.system.transform": async (
 			input: {
 				sessionID?: string;
@@ -394,24 +433,39 @@ export const ClaudeMemPlugin: Plugin = async ({ directory }) =>
 				return;
 			}
 
+			// 如果 chat.message 已经成功注入，跳过系统提示词注入
 			if (state.injectedSessionIds.has(sessionId))
 			{
 				return;
 			}
 
-			await state.worker.ensureStarted({ startupTimeoutMs: 10000 });
-			await state.worker.waitUntilReady(10000);
-
-			var project = getProjectName(directory);
-			var url = `${state.worker.getBaseUrl()}/api/context/inject?projects=${encodeURIComponent(project)}`;
-			var contextRes = await fetchTextWithTimeout(url, 2000);
-
-			if (contextRes.ok && contextRes.text.trim().length > 0)
+			try
 			{
-				output.system.push(`<claude-mem-context>\n${contextRes.text.trim()}\n</claude-mem-context>`);
-			}
+				await state.worker.ensureStarted({ startupTimeoutMs: 10000 });
+				await state.worker.waitUntilReady(10000);
 
-			state.injectedSessionIds.add(sessionId);
+				var project = getProjectName(directory);
+				var url = `${state.worker.getBaseUrl()}/api/context/inject?projects=${encodeURIComponent(project)}`;
+				var contextRes = await fetchTextWithTimeout(url, 5000);
+
+				if (contextRes.ok)
+				{
+					if (contextRes.text.trim().length > 0)
+					{
+						output.system.push(`<claude-mem-context>\n${contextRes.text.trim()}\n</claude-mem-context>`);
+					}
+					// 仅在 Worker 成功响应时标记为已注入；失败时允许后续重试
+					state.injectedSessionIds.add(sessionId);
+				}
+				else
+				{
+					console.error(`[claude-mem] 上下文注入失败 (system.transform): status=${contextRes.status}`);
+				}
+			}
+			catch (err)
+			{
+				console.error(`[claude-mem] 上下文注入异常 (system.transform):`, err);
+			}
 		},
 
 		"experimental.session.compacting": async (input: { sessionID: string }) =>

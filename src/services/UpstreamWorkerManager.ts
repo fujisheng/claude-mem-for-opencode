@@ -51,6 +51,19 @@ export class UpstreamWorkerManager
 		var timeoutMs = partial?.startupTimeoutMs ?? this.options.startupTimeoutMs;
 		var preferredPort = this.options.preferredPort;
 
+		// Always try preferred port first, kill any occupying process if needed
+		if (await this.isPortOccupiedByOtherService(preferredPort))
+		{
+			console.log(`[ClaudeMem] Port ${preferredPort} is occupied. Attempting to free it...`);
+			var killed = await this.killProcessOnPort(preferredPort);
+			if (killed)
+			{
+				// Wait for port to be released
+				await new Promise(resolve => setTimeout(resolve, 1000));
+				console.log(`[ClaudeMem] Port ${preferredPort} is now free.`);
+			}
+		}
+
 		if (await this.isClaudeMemWorker(preferredPort))
 		{
 			this.activePort = preferredPort;
@@ -61,31 +74,51 @@ export class UpstreamWorkerManager
 			? this.buildPortCandidates(preferredPort)
 			: [preferredPort];
 
-		for (var i = 0; i < portsToTry.length; i++)
+		// 如果禁用了 fallback，重试多次并尝试杀掉占用进程
+		var maxRetries = this.options.enablePortFallback ? 1 : 5;
+		
+		for (var retry = 0; retry < maxRetries; retry++)
 		{
-			var port = portsToTry[i];
-
-			if (await this.isClaudeMemWorker(port))
+			if (retry > 0)
 			{
-				this.activePort = port;
-				return port;
+				console.log(`[ClaudeMem] Retry ${retry}/${maxRetries - 1}: Checking port ${preferredPort}...`);
+				await new Promise(resolve => setTimeout(resolve, 2000));
+				
+				// 每次重试都尝试杀掉占用进程
+				if (await this.isPortOccupiedByOtherService(preferredPort))
+				{
+					console.log(`[ClaudeMem] Attempting to kill process on port ${preferredPort}...`);
+					await this.killProcessOnPort(preferredPort);
+					await new Promise(resolve => setTimeout(resolve, 1500));
+				}
 			}
 
-			if (await this.isPortOccupiedByOtherService(port))
+			for (var i = 0; i < portsToTry.length; i++)
 			{
-				continue;
-			}
+				var port = portsToTry[i];
 
-			var started = await this.tryStartWorker(port);
-			if (!started)
-			{
-				continue;
-			}
+				if (await this.isClaudeMemWorker(port))
+				{
+					this.activePort = port;
+					return port;
+				}
 
-			if (await this.waitForReadiness(port, timeoutMs))
-			{
-				this.activePort = port;
-				return port;
+				if (await this.isPortOccupiedByOtherService(port))
+				{
+					continue;
+				}
+
+				var started = await this.tryStartWorker(port);
+				if (!started)
+				{
+					continue;
+				}
+
+				if (await this.waitForReadiness(port, timeoutMs))
+				{
+					this.activePort = port;
+					return port;
+				}
 			}
 		}
 
@@ -136,17 +169,16 @@ export class UpstreamWorkerManager
 				CLAUDE_MEM_MANAGED: "true",
 			};
 
-			var child = spawn(
-				"bun",
-				[
-					this.options.scriptPath,
-					"start",
-				],
+		var child = spawn(
+			"bun",
+			[
+				this.options.scriptPath,
+			],
 				{
 					detached: true,
 					stdio: "ignore",
 					env,
-					windowsHide: true,
+					windowsHide: false,
 				}
 			);
 
@@ -212,6 +244,94 @@ export class UpstreamWorkerManager
 		{
 			return false;
 		}
+	}
+
+	private async killProcessOnPort(port: number): Promise<boolean>
+	{
+		try
+		{
+			var platform = process.platform;
+			var { execSync } = require('child_process');
+			
+			if (platform === 'win32')
+			{
+				// Windows Method 1: netstat + taskkill
+				try
+				{
+					var output = execSync(`netstat -ano | findstr ":${port} " | findstr "LISTENING"`, { encoding: 'utf8' });
+					var lines = output.trim().split('\n');
+					for (var line of lines)
+					{
+						var match = line.trim().match(/(\d+)\s*$/);
+						if (match)
+						{
+							var pid = match[1];
+							console.log(`[ClaudeMem] Killing process ${pid} on port ${port} (taskkill)`);
+							execSync(`taskkill /F /PID ${pid} /T`);
+							return true;
+						}
+					}
+				}
+				catch
+				{
+					// Try PowerShell method
+				}
+
+				// Windows Method 2: PowerShell Get-NetTCPConnection + Stop-Process
+				try
+				{
+					var psCmd = `powershell -Command "Get-NetTCPConnection -LocalPort ${port} -State Listen | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }"`;
+					console.log(`[ClaudeMem] Attempting to kill process on port ${port} (PowerShell)`);
+					execSync(psCmd, { stdio: 'ignore' });
+					return true;
+				}
+				catch
+				{
+					// Try WMIC method
+				}
+
+				// Windows Method 3: WMIC
+				try
+				{
+					var wmicOutput = execSync(`wmic process where "commandline like '%claude-mem%'" get processid`, { encoding: 'utf8' });
+					var pids = wmicOutput.split('\n').slice(1).map((s: string) => s.trim()).filter((s: string) => s && !isNaN(parseInt(s)));
+					for (var pid of pids)
+					{
+						console.log(`[ClaudeMem] Killing claude-mem process ${pid} (WMIC)`);
+						execSync(`wmic process ${pid} delete`, { stdio: 'ignore' });
+					}
+					if (pids.length > 0) return true;
+				}
+				catch
+				{
+					// All methods failed
+				}
+			}
+			else
+			{
+				// Unix/Mac: use lsof
+				try
+				{
+					var output = execSync(`lsof -ti:${port}`, { encoding: 'utf8' });
+					var pid = output.trim();
+					if (pid)
+					{
+						console.log(`[ClaudeMem] Killing process ${pid} on port ${port}`);
+						execSync(`kill -9 ${pid}`);
+						return true;
+					}
+				}
+				catch
+				{
+					// Process not found or kill failed
+				}
+			}
+		}
+		catch (e)
+		{
+			console.error(`[ClaudeMem] Failed to kill process on port ${port}:`, e);
+		}
+		return false;
 	}
 
 	private async waitForReadiness(port: number, timeoutMs: number): Promise<boolean>

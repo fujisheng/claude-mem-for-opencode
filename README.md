@@ -1,4 +1,56 @@
-# Claude-Mem for OpenCode
+# Claude Mem for OpenCode
+
+OpenCode 插件，将 [claude-mem](https://github.com/thedotmack/claude-mem) 的持久记忆功能集成到 OpenCode 中。
+
+## 架构
+
+本插件作为 **适配器层**，将 OpenCode 的生命周期事件映射到上游 claude-mem Worker API：
+
+```
+OpenCode → Plugin (本插件) → HTTP API → claude-mem Worker → SQLite/FTS5
+```
+
+- **Plugin**: 捕获 OpenCode 事件，代理到 Worker
+- **Worker**: 上游 claude-mem 的独立进程，处理存储和检索
+- **Storage**: SQLite + FTS5 全文索引，位于 `~/.claude-mem/`
+
+## 可用工具
+
+| 工具 | 功能 |
+|------|------|
+| `search` | 搜索记忆（支持 FTS 回退） |
+| `timeline` | 获取时间线 |
+| `get_observations` | 获取观测记录 |
+| `save_memory` | 保存记忆 |
+| `__IMPORTANT` | 显示记忆工作流帮助 |
+
+## 隐私标签
+
+在对话中使用 `<private>...</private>` 标签，内容不会被记录到记忆中：
+
+```
+用户: 请帮我检查这段代码 <private>公司内部API密钥: sk-xxx</private> 是否有问题
+```
+
+标签内的内容会被自动过滤，不会进入记忆系统。
+
+## 更新上游
+
+锁定到特定版本：
+
+```bash
+node doc/update-upstream.cjs --tag v10.0.1
+```
+
+获取最新版本：
+
+```bash
+node doc/update-upstream.cjs
+```
+
+---
+
+## 功能简介
 
 🧠 将 [claude-mem](https://github.com/thedotmack/claude-mem) 的持久化记忆能力带到 OpenCode
 

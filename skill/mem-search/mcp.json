@@ -1,15 +1,0 @@
-{
-  "mcpServers": {
-    "mem-search": {
-      "command": "node",
-      "args": [
-        ".opencode/skills/mem-search/bootstrap.cjs"
-      ],
-      "environment": {
-        "CLAUDE_MEM_WORKER_HOST": "127.0.0.1",
-        "CLAUDE_MEM_WORKER_PORT": "37777"
-      },
-      "enabled": true
-    }
-  }
-}

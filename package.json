@@ -2,7 +2,7 @@
   "name": "claude-mem-opencode",
   "version": "1.0.0",
   "description": "Claude-Mem for OpenCode - Persistent memory plugin compatible with claude-mem",
-  "main": "src/index.ts",
+  "main": "dist/index.js",
   "type": "module",
   "scripts": {
     "build": "tsc",
