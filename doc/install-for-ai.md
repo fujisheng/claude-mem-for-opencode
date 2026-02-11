@@ -67,15 +67,19 @@ cd .opencode/plugins/claude-mem-for-opencode
 
 ---
 
-### 步骤 3：安装插件依赖
+### 步骤 3：安装插件依赖并构建
 
 在插件目录执行：
 
 ```bash
 npm install
+npm run build
 ```
 
-这会安装插件运行所需的依赖包。
+- `npm install` 安装插件运行所需的依赖包
+- `npm run build` 将 TypeScript 源码（`src/`）编译到 `dist/`
+
+> ⚠️ **`npm run build` 是必须步骤！** OpenCode 通过 `package.json` 的 `"main": "dist/index.js"` 加载编译后的代码。如果跳过构建，插件不会生效。
 
 ---
 
@@ -143,16 +147,16 @@ node install-upstream.cjs --tag v10.0.1
 
 - 确保 JSON 格式正确
 - 确保路径 `./.opencode/plugins/claude-mem-for-opencode` 存在
-- 确保 `mcp.json` 路径正确
+- 确保 `dist/index.js` 已生成（说明构建步骤已执行）
 
-### 步骤 8：最终验证
+### 步骤 7：最终验证
 
 验证以下文件是否存在：
 
+- ✅ `.opencode/plugins/claude-mem-for-opencode/dist/index.js` (编译后的插件入口)
 - ✅ `.opencode/plugins/claude-mem-for-opencode/src/index.ts` (插件源码)
 - ✅ `.opencode/plugins/claude-mem-for-opencode/vendor/claude-mem/plugin/scripts/worker-service.cjs` (Worker 服务)
-- ✅ `.opencode/plugins/claude-mem-for-opencode/vendor/claude-mem/plugin/scripts/mcp-server.cjs` (MCP 服务器)
-- ✅ `opencode.json` (OpenCode 主配置)
+- ✅ `opencode.json` (OpenCode 主配置，包含 plugin 路径)
 
 ---
 
@@ -192,8 +196,9 @@ node install-upstream.cjs --tag v10.0.1
 cd .opencode/plugins/claude-mem-for-opencode
 git pull origin main
 
-# 2. 更新依赖
+# 2. 更新依赖并重新构建
 npm install
+npm run build
 
 # 3. 更新上游（指定新版本）
 cd doc
@@ -243,10 +248,11 @@ echo "✅ 更新完成！请重启 OpenCode 以使用新版本。"
 1. 检查 `opencode.json` 中是否正确注册了插件：
 
    ```json
-   "plugin": ["./.opencode/plugins/claude-mem"]
+   "plugin": ["./.opencode/plugins/claude-mem-for-opencode"]
    ```
-2. 检查插件是否正确加载（查看 OpenCode 启动日志）
-3. 重启 OpenCode
+2. 检查 `dist/index.js` 是否存在（如不存在需运行 `npm run build`）
+3. 检查插件是否正确加载（查看 OpenCode 启动日志）
+4. 重启 OpenCode
 
 ### 问题 3：Bun 未安装
 
@@ -332,21 +338,25 @@ bun --version
 
 本插件采用双层架构：
 
-1. **OpenCode 适配层** (`claude-mem-for-opencode/src/`)
+1. **OpenCode 适配层** (`src/` → `dist/`)
 
-   - 事件钩子（session.created, tool.execute 等）
-   - MCP 工具定义
-   - Worker 管理
-2. **上游 Worker** (`claude-mem-for-opencode/vendor/claude-mem/`)
+   - 事件钩子（`session.created`, `chat.message`, `tool.execute` 等）
+   - 上下文注入（双重机制：`chat.message` synthetic part + `system.transform` 备用）
+   - 自定义工具定义（search, timeline, get_observations, save_memory）
+   - Worker 进程管理
+
+2. **上游 Worker** (`vendor/claude-mem/`)
 
    - HTTP API 服务（端口 37777）
-   - AI 处理
-   - SQLite 存储
+   - AI 处理（压缩、摘要）
+   - SQLite + FTS5 存储
 
 两者通过 HTTP 通信，适配层将 OpenCode 事件转换为上游 API 调用。
 
+> **关键**：`src/` 目录是 TypeScript 源码，必须通过 `npm run build` 编译到 `dist/` 后才能被 OpenCode 加载。
+
 ---
 
-**版本**：2.0.0
+**版本**：2.1.0
 **更新日期**：2026-02-11
 **兼容**：OpenCode >= 1.0, claude-mem >= 10.0, Bun >= 1.0
