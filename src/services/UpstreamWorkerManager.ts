@@ -1,4 +1,4 @@
-import { spawn } from "child_process";
+import { spawn, spawnSync } from "child_process";
 
 export interface UpstreamWorkerManagerOptions
 {
@@ -120,6 +120,14 @@ export class UpstreamWorkerManager
 			}
 
 			this.lastStartAttemptEpochMs = now;
+
+			// 检查 bun 可用性
+			var bunCheck = spawnSync("bun", ["--version"], { encoding: "utf8" });
+			if (bunCheck.error || bunCheck.status !== 0)
+			{
+				console.error("[ClaudeMem] ERROR: bun is required but not found in PATH. Install: https://bun.sh");
+				return false;
+			}
 
 			var env = {
 				...process.env,

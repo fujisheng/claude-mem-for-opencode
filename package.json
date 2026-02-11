@@ -22,7 +22,6 @@
   "license": "AGPL-3.0",
   "dependencies": {
     "@opencode-ai/plugin": "^1.0.0",
-    "hono": "^4.0.0",
     "zod": "^3.22.0"
   },
   "devDependencies": {
