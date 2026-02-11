@@ -7,7 +7,7 @@
 **复制以下指令，发送给 AI：**
 
 ```
-请从 https://github.com/fujisheng/claude-mem-for-opencode.git 安装 claude-mem 插件
+请按照 [https://github.com/fujisheng/claude-mem-for-opencode.git](https://github.com/fujisheng/claude-mem-for-opencode/blob/main/doc/install-for-ai.md) 为我安装 opencode的 claude-mem 插件
 ```
 
 AI 会读取 [doc/install-for-ai.md](./doc/install-for-ai.md) 并自动完成所有配置（克隆、安装、配置、验证），无需手动操作！
