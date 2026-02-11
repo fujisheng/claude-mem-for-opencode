@@ -4,6 +4,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { UpstreamWorkerManager } from "./services/UpstreamWorkerManager";
 import { searchWithFTSFallback } from "./utils/fts-fallback";
+import { stripPrivateTags } from "./utils/privacy";
 import type { Event, Part, TextPart } from "@opencode-ai/sdk";
 
 interface PluginState
@@ -286,7 +287,61 @@ export const ClaudeMemPlugin: Plugin = async ({ directory }) =>
 				}
 
 				var textPart = part as TextPart;
-				state.lastAssistantTextBySessionId.set(part.sessionID, textPart.text ?? "");
+				var filteredText = stripPrivateTags(textPart.text ?? "");
+				state.lastAssistantTextBySessionId.set(part.sessionID, filteredText);
+			}
+
+			if (event.type === "session.idle")
+			{
+				var idleSessionId = event.properties?.info?.id;
+				if (typeof idleSessionId !== "string" || idleSessionId.length === 0)
+				{
+					return;
+				}
+
+				if (!state.worker)
+				{
+					return;
+				}
+
+				await postJsonWithTimeout(
+					`${state.worker.getBaseUrl()}/api/sessions/${idleSessionId}/idle`,
+					{
+						contentSessionId: idleSessionId,
+						timestamp: Date.now(),
+					},
+					2000
+				);
+
+				return;
+			}
+
+			if (event.type === "session.error")
+			{
+				var errorSessionId = event.properties?.info?.id;
+				var error = event.properties?.info?.error;
+				if (typeof errorSessionId !== "string" || errorSessionId.length === 0)
+				{
+					return;
+				}
+
+				if (!state.worker)
+				{
+					return;
+				}
+
+				await postJsonWithTimeout(
+					`${state.worker.getBaseUrl()}/api/observation`,
+					{
+						content: typeof error === "object" ? (error?.message || String(error)) : String(error),
+						type: "error",
+						sessionId: errorSessionId,
+						timestamp: Date.now(),
+					},
+					2000
+				);
+
+				return;
 			}
 		},
 
@@ -426,6 +481,8 @@ export const ClaudeMemPlugin: Plugin = async ({ directory }) =>
 			var args = state.toolArgsByCallId.get(callKey) ?? {};
 			state.toolArgsByCallId.delete(callKey);
 
+			var filteredOutput = stripPrivateTags(output.output);
+
 			await postJsonWithTimeout(
 				`${state.worker.getBaseUrl()}/api/sessions/observations`,
 				{
@@ -434,7 +491,7 @@ export const ClaudeMemPlugin: Plugin = async ({ directory }) =>
 					tool_input: args,
 					tool_response: {
 						title: output.title,
-						output: output.output,
+						output: filteredOutput,
 						metadata: output.metadata,
 					},
 					cwd: directory,
