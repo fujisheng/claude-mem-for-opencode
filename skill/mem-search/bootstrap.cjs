@@ -29,8 +29,10 @@ function getBaseDir() {
 const BASE_DIR = getBaseDir();
 const WORKER_SERVICE_SCRIPT = path.join(BASE_DIR, 'worker-service.cjs');
 const MCP_SCRIPT = path.join(BASE_DIR, 'mcp-server.cjs');
+const SEARCH_PROXY_SCRIPT = path.join(__dirname, 'search-proxy.cjs');
 const WORKER_PORT = process.env.CLAUDE_MEM_WORKER_PORT || '37777';
 const WORKER_HOST = process.env.CLAUDE_MEM_WORKER_HOST || '127.0.0.1';
+const PROXY_PORT = process.env.CLAUDE_MEM_PROXY_PORT || '37778';
 
 // Logging helper (to stderr so it doesn't break MCP JSON-RPC on stdout)
 function log(msg) {
@@ -106,6 +108,32 @@ async function main() {
     windowsHide: true
   });
 
+  // 2. Start search proxy (SQLite FTS fallback for /api/search)
+  if (fs.existsSync(SEARCH_PROXY_SCRIPT)) {
+    log(`Spawning search proxy: ${SEARCH_PROXY_SCRIPT}`);
+    const proxy = spawn('bun', [SEARCH_PROXY_SCRIPT], {
+      cwd: path.dirname(SEARCH_PROXY_SCRIPT),
+      stdio: ['ignore', 'ignore', 'ignore'],
+      env: {
+        ...process.env,
+        CLAUDE_MEM_WORKER_HOST: WORKER_HOST,
+        CLAUDE_MEM_WORKER_PORT: WORKER_PORT,
+        CLAUDE_MEM_PROXY_PORT: PROXY_PORT
+      },
+      windowsHide: true
+    });
+
+    proxy.on('error', (err) => {
+      log(`Search proxy spawn error: ${err.message}`);
+    });
+
+    proxy.on('exit', (code, signal) => {
+      log(`Search proxy exited with code ${code} and signal ${signal}`);
+    });
+  } else {
+    log(`Search proxy not found: ${SEARCH_PROXY_SCRIPT}`);
+  }
+
   worker.on('error', (err) => {
     log(`Worker spawn error: ${err.message}`);
   });
@@ -124,14 +152,14 @@ async function main() {
     process.exit(1);
   }
 
-  // 2. Start the MCP Server
+  // 3. Start the MCP Server (point to proxy for search)
   log(`Spawning MCP server: ${MCP_SCRIPT}`);
   const mcp = spawn('bun', [MCP_SCRIPT], {
     cwd: BASE_DIR,
     stdio: 'inherit',
     env: { 
       ...process.env,
-      CLAUDE_MEM_WORKER_PORT: WORKER_PORT,
+      CLAUDE_MEM_WORKER_PORT: PROXY_PORT,
       CLAUDE_MEM_WORKER_HOST: WORKER_HOST
     },
     windowsHide: true
