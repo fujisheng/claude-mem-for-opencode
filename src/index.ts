@@ -3,6 +3,7 @@ import { tool } from "@opencode-ai/plugin";
 import path from "path";
 import { fileURLToPath } from "url";
 import { UpstreamWorkerManager } from "./services/UpstreamWorkerManager";
+import { searchWithFTSFallback } from "./utils/fts-fallback";
 import type { Event, Part, TextPart } from "@opencode-ai/sdk";
 
 interface PluginState
@@ -471,7 +472,7 @@ export const ClaudeMemPlugin: Plugin = async ({ directory }) =>
 					dateEnd: tool.schema.string().optional(),
 					orderBy: tool.schema.string().optional(),
 				},
-				async execute(args)
+			async execute(args)
 				{
 					await initializeWorker();
 					if (!state.worker)
@@ -497,12 +498,39 @@ export const ClaudeMemPlugin: Plugin = async ({ directory }) =>
 						3000
 					);
 
+					var content: string | undefined;
+
+					if (res.ok)
+					{
+						content = res.body?.content?.[0]?.text;
+					}
+
+					// FTS fallback: if upstream returned no results or failed
+					var shouldFallback = !res.ok
+						|| !content
+						|| content.includes("No results found")
+						|| content.includes("Vector search failed")
+						|| content.includes("semantic search unavailable");
+
+					if (shouldFallback && args.query)
+					{
+						var fallbackResult = await searchWithFTSFallback(
+							args.query,
+							args.limit ?? 20,
+							args.project,
+						);
+
+						if (fallbackResult.length > 0)
+						{
+							return fallbackResult;
+						}
+					}
+
 					if (!res.ok)
 					{
 						return "Search failed.";
 					}
 
-					var content = res.body?.content?.[0]?.text;
 					return typeof content === "string" ? content : JSON.stringify(res.body, null, 2);
 				},
 			}),
