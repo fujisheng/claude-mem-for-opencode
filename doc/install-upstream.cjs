@@ -5,13 +5,15 @@
  * 
  * 使用方法:
  *   node install-upstream.js
+ *   node install-upstream.js --tag v10.0.1
  * 
  * 功能:
  *   1. 检查系统依赖
  *   2. 克隆上游仓库
- *   3. 安装依赖并构建
- *   4. 验证安装
- *   5. 配置 MCP
+ *   3. 检出指定 tag（默认最新 tag）
+ *   4. 安装依赖并构建
+ *   5. 验证安装
+ *   6. 配置 MCP
  */
 
 const { execSync } = require('child_process');
@@ -22,9 +24,49 @@ const path = require('path');
 const CONFIG = {
   upstreamRepo: 'https://github.com/thedotmack/claude-mem.git',
   installPath: path.join(__dirname, '..', 'vendor', 'claude-mem'),
+  versionFilePath: path.join(__dirname, '..', '.upstream-version'),
   mcpConfigPath: path.join(__dirname, '..', '..', '..', 'skills', 'mem-search', 'mcp.json'),
   bootstrapScript: path.join(__dirname, '..', '..', '..', 'skills', 'mem-search', 'bootstrap.cjs'),
 };
+
+// 解析命令行参数
+function parseArgs() {
+  const args = process.argv.slice(2);
+  const tagIndex = args.indexOf('--tag');
+  const tag = tagIndex !== -1 && args[tagIndex + 1] ? args[tagIndex + 1] : null;
+  return { tag };
+}
+
+// 获取最新 tag
+function getLatestTag() {
+  const result = exec('git describe --tags --abbrev=0', { 
+    cwd: CONFIG.installPath, 
+    silent: true 
+  });
+  if (result.success && result.output) {
+    return result.output.trim();
+  }
+  // 备选方案：列出所有 tags 取最后一个
+  const tagsResult = exec('git tag --list --sort=-version:refname', { 
+    cwd: CONFIG.installPath, 
+    silent: true 
+  });
+  if (tagsResult.success && tagsResult.output) {
+    const tags = tagsResult.output.trim().split('\n').filter(t => t);
+    return tags[0] || null;
+  }
+  return null;
+}
+
+// 记录版本到文件
+function recordVersion(version) {
+  try {
+    fs.writeFileSync(CONFIG.versionFilePath, version, 'utf8');
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
 
 // 颜色输出
 const colors = {
@@ -113,7 +155,7 @@ async function checkDependencies() {
 }
 
 // 步骤 2: 克隆或更新上游代码
-async function cloneOrUpdateUpstream() {
+async function cloneOrUpdateUpstream(args) {
   log('\n步骤 2/5: 拉取上游代码...', 'info');
   
   if (fs.existsSync(CONFIG.installPath)) {
@@ -145,6 +187,36 @@ async function cloneOrUpdateUpstream() {
     } else {
       log(`  ❌ 克隆失败: ${result.error}`, 'error');
       process.exit(1);
+    }
+  }
+  
+  // 处理 tag 检出
+  let targetTag = args.tag;
+  if (!targetTag) {
+    // 默认检出最新 tag
+    targetTag = getLatestTag();
+    if (targetTag) {
+      log(`  检出最新 tag: ${targetTag}`, 'info');
+    }
+  } else {
+    log(`  检出指定 tag: ${targetTag}`, 'info');
+  }
+  
+  if (targetTag) {
+    exec('git fetch --tags', { cwd: CONFIG.installPath, silent: true });
+    const checkoutResult = exec(`git checkout ${targetTag}`, { 
+      cwd: CONFIG.installPath,
+      silent: true 
+    });
+    
+    if (checkoutResult.success) {
+      log(`  ✅ 已切换到 ${targetTag}`, 'success');
+      // 记录版本
+      if (recordVersion(targetTag)) {
+        log(`  ✅ 版本已记录到 ${CONFIG.versionFilePath}`, 'success');
+      }
+    } else {
+      log(`  ⚠️ 切换到 ${targetTag} 失败，使用默认分支`, 'warn');
     }
   }
   
@@ -243,6 +315,8 @@ async function verifyInstallation() {
 
 // 主函数
 async function main() {
+  const args = parseArgs();
+  
   console.log('\n' + '='.repeat(60));
   console.log('  Claude-Mem 上游自动安装脚本');
   console.log('  版本: 1.0.0');
@@ -250,13 +324,20 @@ async function main() {
   
   try {
     await checkDependencies();
-    await cloneOrUpdateUpstream();
+    await cloneOrUpdateUpstream(args);
     await installDependencies();
     await buildProject();
     await verifyInstallation();
     
+    // 显示当前版本
+    const currentVersion = exec('git describe --tags --always', { 
+      cwd: CONFIG.installPath, 
+      silent: true 
+    }).output?.trim() || 'unknown';
+    
     console.log('\n' + '='.repeat(60));
     console.log('  ✅ 安装完成！');
+    console.log(`  当前版本: ${currentVersion}`);
     console.log('='.repeat(60) + '\n');
     
     console.log('下一步操作：');
@@ -264,7 +345,8 @@ async function main() {
     console.log('  2. 测试工具: __IMPORTANT()');
     console.log('  3. 测试搜索: search(query="test")');
     console.log('');
-    console.log('更新上游代码时，重新运行此脚本即可。');
+    console.log('更新上游代码时，运行: node update-upstream.cjs');
+    console.log('切换到指定版本: node update-upstream.cjs --tag v10.0.1');
     console.log('');
     
   } catch (error) {

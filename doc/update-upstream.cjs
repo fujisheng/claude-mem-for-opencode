@@ -4,9 +4,10 @@
  * 
  * 使用方法:
  *   node update-upstream.js
+ *   node update-upstream.js --tag v10.0.1
  * 
  * 功能:
- *   1. 拉取上游最新代码
+ *   1. 拉取上游最新代码（或切换到指定 tag）
  *   2. 更新依赖
  *   3. 重新构建
  *   4. 验证更新
@@ -19,7 +20,16 @@ const path = require('path');
 
 const CONFIG = {
   upstreamPath: path.join(__dirname, '..', 'vendor', 'claude-mem'),
+  versionFilePath: path.join(__dirname, '..', '.upstream-version'),
 };
+
+// 解析命令行参数
+function parseArgs() {
+  const args = process.argv.slice(2);
+  const tagIndex = args.indexOf('--tag');
+  const tag = tagIndex !== -1 && args[tagIndex + 1] ? args[tagIndex + 1] : null;
+  return { tag };
+}
 
 const colors = {
   reset: '\x1b[0m',
@@ -54,6 +64,8 @@ function exec(command, options = {}) {
 }
 
 async function main() {
+  const args = parseArgs();
+  
   console.log('\n' + '='.repeat(60));
   console.log('  Claude-Mem 上游更新脚本');
   console.log('='.repeat(60) + '\n');
@@ -72,14 +84,29 @@ async function main() {
   }).output?.trim() || 'unknown';
   log(`当前版本: ${currentVersion}`);
   
-  // 步骤 1: 拉取最新代码
-  log('\n步骤 1/4: 拉取上游最新代码...');
-  exec('git fetch origin', { cwd: CONFIG.upstreamPath, silent: true });
-  const result = exec('git pull origin main', { cwd: CONFIG.upstreamPath });
-  
-  if (!result.success) {
-    log('拉取失败，尝试强制更新...', 'warn');
-    exec('git reset --hard origin/main', { cwd: CONFIG.upstreamPath, silent: true });
+  // 步骤 1: 拉取/切换到指定版本
+  if (args.tag) {
+    log(`\n步骤 1/4: 切换到指定 tag: ${args.tag}...`);
+    exec('git fetch --tags', { cwd: CONFIG.upstreamPath, silent: true });
+    const checkoutResult = exec(`git checkout ${args.tag}`, { cwd: CONFIG.upstreamPath });
+    
+    if (!checkoutResult.success) {
+      log(`切换到 tag ${args.tag} 失败`, 'error');
+      process.exit(1);
+    }
+    
+    // 记录版本
+    fs.writeFileSync(CONFIG.versionFilePath, args.tag, 'utf8');
+    log(`已记录版本: ${args.tag}`, 'success');
+  } else {
+    log('\n步骤 1/4: 拉取上游最新代码...');
+    exec('git fetch origin', { cwd: CONFIG.upstreamPath, silent: true });
+    const result = exec('git pull origin main', { cwd: CONFIG.upstreamPath });
+    
+    if (!result.success) {
+      log('拉取失败，尝试强制更新...', 'warn');
+      exec('git reset --hard origin/main', { cwd: CONFIG.upstreamPath, silent: true });
+    }
   }
   
   const newVersion = exec('git describe --tags --always', { 
@@ -145,8 +172,14 @@ async function main() {
   }
   
   // 完成
+  const finalVersion = exec('git describe --tags --always', { 
+    cwd: CONFIG.upstreamPath, 
+    silent: true 
+  }).output?.trim() || 'unknown';
+  
   console.log('\n' + '='.repeat(60));
   console.log('  ✅ 更新完成！');
+  console.log(`  当前版本: ${finalVersion}`);
   console.log('='.repeat(60) + '\n');
   
   console.log(`${colors.yellow}⚠️  重要提示：${colors.reset}`);
