@@ -110,6 +110,27 @@ node install-upstream.cjs --tag v10.0.1
 
 ---
 
+## 重启 Worker 服务
+
+**手动重启 Worker 服务**：
+
+在 OpenCode 中输入以下命令并执行：
+
+```
+/restart-worker
+```
+
+此命令会：
+1. 检测占用端口 37777 的进程
+2. 解析进程 ID (PID)
+3. 使用 `taskkill /F` 终止进程（Windows 平台）
+
+然后插件会在下一次 hook 调用时自动启动新的 Worker。
+
+> **说明**：此命令已配置在项目根目录的 `.opencode.json` 中。如需修改，请编辑该文件的 `command.restart-worker.template` 字段。
+
+---
+
 ## 使用方法
 
 ### 搜索记忆
@@ -151,6 +172,21 @@ AI 会自动在 `opencode.json` 中添加：
   ]
 }
 ```
+
+### 手动命令配置（已添加）
+
+重启 claude-mem Worker 服务的命令已添加到 `opencode.json`：
+
+**使用方法**：在 OpenCode 中输入 `/restart-worker` 并执行
+
+此命令会：
+1. 检测占用端口 37777 的进程
+2. 解析进程 ID (PID)
+3. 使用 `taskkill /F` 终止进程（Windows 平台）
+
+然后插件会在下一次 hook 调用时自动启动新的 Worker。
+
+---
 
 ### 环境变量
 

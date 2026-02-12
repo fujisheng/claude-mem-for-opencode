@@ -9,5 +9,6 @@
  * @returns 过滤后的文本
  */
 export function stripPrivateTags(text: string): string {
+	if (!text) return "";
 	return text.replace(/<private>[\s\S]*?<\/private>/gi, "");
 }
