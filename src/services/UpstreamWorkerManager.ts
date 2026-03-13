@@ -15,6 +15,7 @@ export class UpstreamWorkerManager
 {
 	private readonly options: UpstreamWorkerManagerOptions;
 	private activePort: number | null;
+	private startInFlight: Promise<number> | null;
 	private lastStartAttemptEpochMs: number;
 	private hasValidatedBunRuntime: boolean;
 	private lastFailedStartEpochMs: number;
@@ -26,6 +27,7 @@ export class UpstreamWorkerManager
 	{
 		this.options = options;
 		this.activePort = null;
+		this.startInFlight = null;
 		this.lastStartAttemptEpochMs = 0;
 		this.hasValidatedBunRuntime = false;
 		this.lastFailedStartEpochMs = 0;
@@ -50,6 +52,29 @@ export class UpstreamWorkerManager
 	}
 
 	public async ensureStarted(partial?: { startupTimeoutMs?: number }): Promise<number>
+	{
+		if (this.startInFlight !== null)
+		{
+			return await this.startInFlight;
+		}
+
+		var startPromise = this.ensureStartedInternal(partial);
+		this.startInFlight = startPromise;
+
+		try
+		{
+			return await startPromise;
+		}
+		finally
+		{
+			if (this.startInFlight === startPromise)
+			{
+				this.startInFlight = null;
+			}
+		}
+	}
+
+	private async ensureStartedInternal(partial?: { startupTimeoutMs?: number }): Promise<number>
 	{
 		this.ensureClaudeCliScriptConfigured();
 
@@ -154,6 +179,11 @@ export class UpstreamWorkerManager
 	}
 
 	public async waitUntilReady(timeoutMs: number): Promise<boolean>
+	{
+		return await this.waitForReadiness(this.getPort(), timeoutMs);
+	}
+
+	public async isReady(timeoutMs: number = 50): Promise<boolean>
 	{
 		return await this.waitForReadiness(this.getPort(), timeoutMs);
 	}
@@ -562,11 +592,18 @@ export class UpstreamWorkerManager
 		var startTime = Date.now();
 		while (Date.now() - startTime < timeoutMs)
 		{
+			var elapsedMs = Date.now() - startTime;
+			var remainingMs = timeoutMs - elapsedMs;
+			if (remainingMs <= 0)
+			{
+				break;
+			}
+
 			try
 			{
 				var res = await this.fetchJsonWithTimeout(
 					`http://127.0.0.1:${port}/api/readiness`,
-					800
+					Math.min(800, Math.max(50, remainingMs))
 				);
 
 				if (res.ok)
@@ -578,7 +615,7 @@ export class UpstreamWorkerManager
 			{
 			}
 
-			await new Promise(resolve => setTimeout(resolve, 250));
+			await new Promise(resolve => setTimeout(resolve, Math.min(250, remainingMs)));
 		}
 
 		return false;

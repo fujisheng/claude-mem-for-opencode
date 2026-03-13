@@ -69,6 +69,11 @@ function getToolCallKey(sessionId: string, callId: string): string
 	return `${sessionId}:${callId}`;
 }
 
+function createSyntheticPartId(): string
+{
+	return `prt-claude-mem-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 function extractTextFromParts(parts: Part[]): string
 {
 	var texts: string[] = [];
@@ -204,15 +209,6 @@ async function initializeWorker(): Promise<void>
 		enablePortFallback: true,  // 启用端口回退，避免端口僵死占用导致启动失败
 		startupTimeoutMs: 30000,   // 增加到 30 秒，给清理进程更多时间
 	});
-
-	try
-	{
-		await state.worker.ensureStarted({ startupTimeoutMs: 3000 });
-	}
-	catch (error)
-	{
-		console.error("[claude-mem] Worker 初始化失败:", error);
-	}
 }
 
 async function ensureWorkerReady(startupTimeoutMs: number, readinessTimeoutMs: number): Promise<boolean>
@@ -235,6 +231,11 @@ async function ensureWorkerReady(startupTimeoutMs: number, readinessTimeoutMs: n
 	}
 }
 
+function warmupWorker(startupTimeoutMs: number, readinessTimeoutMs: number): void
+{
+	void ensureWorkerReady(startupTimeoutMs, readinessTimeoutMs);
+}
+
 export const ClaudeMemPlugin: Plugin = async ({ directory }) =>
 {
 	await initializeWorker();
@@ -254,7 +255,7 @@ export const ClaudeMemPlugin: Plugin = async ({ directory }) =>
 				}
 
 				await initializeWorker();
-				await ensureWorkerReady(3000, 3000);
+				warmupWorker(3000, 3000);
 
 				return;
 			}
@@ -384,7 +385,8 @@ export const ClaudeMemPlugin: Plugin = async ({ directory }) =>
 				return;
 			}
 
-			var workerReady = await ensureWorkerReady(10000, 10000);
+			warmupWorker(10000, 10000);
+			var workerReady = await state.worker.isReady(150);
 			if (!workerReady)
 			{
 				console.error("[claude-mem] Worker 未就绪，跳过 chat.message 注入");
@@ -406,7 +408,7 @@ export const ClaudeMemPlugin: Plugin = async ({ directory }) =>
 						if (contextRes.text.trim().length > 0)
 						{
 							output.parts.unshift({
-								id: `claude-mem-context-${Date.now()}`,
+								id: createSyntheticPartId(),
 								sessionID: input.sessionID,
 								messageID: output.message.id,
 								type: "text",
@@ -469,7 +471,8 @@ export const ClaudeMemPlugin: Plugin = async ({ directory }) =>
 
 			try
 			{
-				var workerReady = await ensureWorkerReady(10000, 10000);
+				warmupWorker(10000, 10000);
+				var workerReady = await state.worker.isReady(150);
 				if (!workerReady)
 				{
 					console.error("[claude-mem] Worker 未就绪，跳过 system.transform 注入");
