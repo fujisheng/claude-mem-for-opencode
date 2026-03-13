@@ -201,11 +201,38 @@ async function initializeWorker(): Promise<void>
 	state.worker = new UpstreamWorkerManager({
 		scriptPath,
 		preferredPort: 37777,
-		enablePortFallback: false,  // 禁用端口回退，强制使用 37777
+		enablePortFallback: true,  // 启用端口回退，避免端口僵死占用导致启动失败
 		startupTimeoutMs: 30000,   // 增加到 30 秒，给清理进程更多时间
 	});
 
-	await state.worker.ensureStarted({ startupTimeoutMs: 3000 });
+	try
+	{
+		await state.worker.ensureStarted({ startupTimeoutMs: 3000 });
+	}
+	catch (error)
+	{
+		console.error("[claude-mem] Worker 初始化失败:", error);
+	}
+}
+
+async function ensureWorkerReady(startupTimeoutMs: number, readinessTimeoutMs: number): Promise<boolean>
+{
+	await initializeWorker();
+	if (!state.worker)
+	{
+		return false;
+	}
+
+	try
+	{
+		await state.worker.ensureStarted({ startupTimeoutMs });
+		return await state.worker.waitUntilReady(readinessTimeoutMs);
+	}
+	catch (error)
+	{
+		console.error("[claude-mem] Worker 启动失败:", error);
+		return false;
+	}
 }
 
 export const ClaudeMemPlugin: Plugin = async ({ directory }) =>
@@ -227,10 +254,7 @@ export const ClaudeMemPlugin: Plugin = async ({ directory }) =>
 				}
 
 				await initializeWorker();
-				if (state.worker)
-				{
-					await state.worker.ensureStarted({ startupTimeoutMs: 3000 });
-				}
+				await ensureWorkerReady(3000, 3000);
 
 				return;
 			}
@@ -360,8 +384,12 @@ export const ClaudeMemPlugin: Plugin = async ({ directory }) =>
 				return;
 			}
 
-			await state.worker.ensureStarted({ startupTimeoutMs: 10000 });
-			await state.worker.waitUntilReady(10000);
+			var workerReady = await ensureWorkerReady(10000, 10000);
+			if (!workerReady)
+			{
+				console.error("[claude-mem] Worker 未就绪，跳过 chat.message 注入");
+				return;
+			}
 
 			// 主注入机制：首次消息时以 synthetic part 注入历史记忆上下文
 			// 参考 supermemory 插件的验证模式，比 system.transform 更可靠
@@ -441,8 +469,12 @@ export const ClaudeMemPlugin: Plugin = async ({ directory }) =>
 
 			try
 			{
-				await state.worker.ensureStarted({ startupTimeoutMs: 10000 });
-				await state.worker.waitUntilReady(10000);
+				var workerReady = await ensureWorkerReady(10000, 10000);
+				if (!workerReady)
+				{
+					console.error("[claude-mem] Worker 未就绪，跳过 system.transform 注入");
+					return;
+				}
 
 				var project = getProjectName(directory);
 				var url = `${state.worker.getBaseUrl()}/api/context/inject?projects=${encodeURIComponent(project)}`;
@@ -591,7 +623,10 @@ export const ClaudeMemPlugin: Plugin = async ({ directory }) =>
 						return "claude-mem worker is not available.";
 					}
 
-					await state.worker.ensureStarted({ startupTimeoutMs: 3000 });
+					if (!(await ensureWorkerReady(3000, 3000)))
+					{
+						return "claude-mem worker is not available.";
+					}
 
 					var params = new URLSearchParams();
 					if (args.query) params.set("query", args.query);
@@ -663,7 +698,10 @@ export const ClaudeMemPlugin: Plugin = async ({ directory }) =>
 						return "claude-mem worker is not available.";
 					}
 
-					await state.worker.ensureStarted({ startupTimeoutMs: 3000 });
+					if (!(await ensureWorkerReady(3000, 3000)))
+					{
+						return "claude-mem worker is not available.";
+					}
 
 					var params = new URLSearchParams();
 					if (args.anchor !== undefined) params.set("anchor", String(args.anchor));
@@ -703,7 +741,10 @@ export const ClaudeMemPlugin: Plugin = async ({ directory }) =>
 						return "claude-mem worker is not available.";
 					}
 
-					await state.worker.ensureStarted({ startupTimeoutMs: 3000 });
+					if (!(await ensureWorkerReady(3000, 3000)))
+					{
+						return "claude-mem worker is not available.";
+					}
 
 					var res = await postJsonWithTimeout(
 						`${state.worker.getBaseUrl()}/api/observations/batch`,
@@ -740,7 +781,10 @@ export const ClaudeMemPlugin: Plugin = async ({ directory }) =>
 						return "claude-mem worker is not available.";
 					}
 
-					await state.worker.ensureStarted({ startupTimeoutMs: 3000 });
+					if (!(await ensureWorkerReady(3000, 3000)))
+					{
+						return "claude-mem worker is not available.";
+					}
 
 					var res = await postJsonWithTimeout(
 						`${state.worker.getBaseUrl()}/api/memory/save`,
