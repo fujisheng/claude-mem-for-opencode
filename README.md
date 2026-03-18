@@ -121,11 +121,13 @@ node install-upstream.cjs --tag v10.0.1
 ```
 
 此命令会：
-1. 检测占用端口 37777 的进程
-2. 解析进程 ID (PID)
-3. 使用 `taskkill /F` 终止进程（Windows 平台）
+1. 优先从 `~/.claude-mem/opencode-worker-state/*.json` 识别受管 Worker PID
+2. 兜底扫描 37777-37796，仅处理命令行可验证归属本插件的 Worker
+3. 清理对应 state 与 lock 残留
 
 然后插件会在下一次 hook 调用时自动启动新的 Worker。
+
+> 说明：新实现是“按归属识别后重启”，不再按端口盲杀，避免误杀和僵尸进程累积。
 
 > **说明**：此命令已配置在项目根目录的 `.opencode.json` 中。如需修改，请编辑该文件的 `command.restart-worker.template` 字段。
 
@@ -180,9 +182,9 @@ AI 会自动在 `opencode.json` 中添加：
 **使用方法**：在 OpenCode 中输入 `/restart-worker` 并执行
 
 此命令会：
-1. 检测占用端口 37777 的进程
-2. 解析进程 ID (PID)
-3. 使用 `taskkill /F` 终止进程（Windows 平台）
+1. 识别受管 Worker（state 文件 + 端口兜底扫描）
+2. 仅终止已验证归属本插件的 Worker 进程
+3. 清理对应 state / lock 残留
 
 然后插件会在下一次 hook 调用时自动启动新的 Worker。
 

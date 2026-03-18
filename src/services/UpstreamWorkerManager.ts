@@ -1,7 +1,35 @@
+import { createHash } from "crypto";
 import { spawn, spawnSync } from "child_process";
-import { existsSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from "fs";
 import { delimiter, dirname, join } from "path";
 import { fileURLToPath } from "url";
+
+interface WorkerState
+{
+	pid: number | null;
+	port: number;
+	workerPath: string;
+	version: string | null;
+	managed: boolean;
+	updatedAt: number;
+}
+
+interface WorkerHealthInfo
+{
+	pid: number | null;
+	port: number;
+	workerPath: string | null;
+	version: string | null;
+	managed: boolean;
+	status: string | null;
+}
+
+interface ProcessInfo
+{
+	pid: number;
+	commandLine: string | null;
+	createdAt: string | null;
+}
 
 export interface UpstreamWorkerManagerOptions
 {
@@ -21,6 +49,8 @@ export class UpstreamWorkerManager
 	private lastFailedStartEpochMs: number;
 	private readonly startFailureCooldownMs: number;
 	private readonly workerPreloadPath: string;
+	private readonly stateFilePath: string;
+	private readonly startupLockPath: string;
 	private bunExecutablePath: string | null;
 
 	public constructor(options: UpstreamWorkerManagerOptions)
@@ -33,6 +63,8 @@ export class UpstreamWorkerManager
 		this.lastFailedStartEpochMs = 0;
 		this.startFailureCooldownMs = process.platform === "win32" ? 120000 : 5000;
 		this.workerPreloadPath = fileURLToPath(new URL("./WorkerProcessPreload.js", import.meta.url));
+		this.stateFilePath = this.buildWorkerStateFilePath(options.scriptPath);
+		this.startupLockPath = `${this.stateFilePath}.lock`;
 		this.bunExecutablePath = null;
 	}
 
@@ -76,87 +108,53 @@ export class UpstreamWorkerManager
 
 	private async ensureStartedInternal(partial?: { startupTimeoutMs?: number }): Promise<number>
 	{
-		this.ensureClaudeCliScriptConfigured();
-
-		if (this.activePort !== null)
+		return await this.withStartupLock(async () =>
 		{
-			if (await this.isClaudeMemWorker(this.activePort))
+			this.ensureClaudeCliScriptConfigured();
+
+			if (this.activePort !== null)
 			{
-				return this.activePort;
-			}
-
-			this.activePort = null;
-		}
-
-		var timeoutMs = partial?.startupTimeoutMs ?? this.options.startupTimeoutMs;
-		var preferredPort = this.options.preferredPort;
-
-		// Always try preferred port first, kill any occupying process if needed
-		if (await this.isPortOccupiedByOtherService(preferredPort))
-		{
-			console.log(`[ClaudeMem] Port ${preferredPort} is occupied. Attempting to free it...`);
-			var killed = await this.killProcessOnPort(preferredPort);
-			if (killed)
-			{
-				// Wait for port to be released
-				await new Promise(resolve => setTimeout(resolve, 1000));
-				console.log(`[ClaudeMem] Port ${preferredPort} is now free.`);
-			}
-		}
-
-		if (await this.isClaudeMemWorker(preferredPort))
-		{
-			this.activePort = preferredPort;
-			return preferredPort;
-		}
-
-		if (this.isPortListening(preferredPort))
-		{
-			console.log(`[ClaudeMem] Port ${preferredPort} is occupied by an unresponsive process. Attempting cleanup...`);
-			await this.killProcessOnPort(preferredPort);
-			await new Promise(resolve => setTimeout(resolve, 1200));
-		}
-
-		var portsToTry = this.options.enablePortFallback
-			? this.buildPortCandidates(preferredPort)
-			: [preferredPort];
-
-		// 如果禁用了 fallback，重试多次并尝试杀掉占用进程
-		var maxRetries = this.options.enablePortFallback ? 1 : 5;
-		
-		for (var retry = 0; retry < maxRetries; retry++)
-		{
-			if (retry > 0)
-			{
-				console.log(`[ClaudeMem] Retry ${retry}/${maxRetries - 1}: Checking port ${preferredPort}...`);
-				await new Promise(resolve => setTimeout(resolve, 2000));
-				
-				// 每次重试都尝试杀掉占用进程
-				if (await this.isPortOccupiedByOtherService(preferredPort))
+				var activeWorker = await this.getClaudeMemWorkerInfo(this.activePort, 1000, 2);
+				if (this.isExpectedWorkerInfo(activeWorker))
 				{
-					console.log(`[ClaudeMem] Attempting to kill process on port ${preferredPort}...`);
-					await this.killProcessOnPort(preferredPort);
-					await new Promise(resolve => setTimeout(resolve, 1500));
-				}
-			}
-
-			for (var i = 0; i < portsToTry.length; i++)
-			{
-				var port = portsToTry[i];
-
-				if (await this.isClaudeMemWorker(port))
-				{
-					this.activePort = port;
-					return port;
+					this.writeWorkerState(activeWorker!);
+					return this.activePort;
 				}
 
-				if (await this.isPortOccupiedByOtherService(port))
+				this.activePort = null;
+			}
+
+			var timeoutMs = partial?.startupTimeoutMs ?? this.options.startupTimeoutMs;
+			var preferredPort = this.options.preferredPort;
+			var portsToTry = this.options.enablePortFallback
+				? this.buildPortCandidates(preferredPort)
+				: [preferredPort];
+			var knownState = this.readWorkerState();
+			var reuseOrder = this.buildReuseOrder(portsToTry, knownState);
+
+			for (var i = 0; i < reuseOrder.length; i++)
+			{
+				var existingPort = reuseOrder[i];
+				var existingWorker = await this.getClaudeMemWorkerInfo(existingPort, 1200, 2);
+				if (!this.isExpectedWorkerInfo(existingWorker))
 				{
-					if (this.isPortListening(port))
-					{
-						await this.killProcessOnPort(port);
-						await new Promise(resolve => setTimeout(resolve, 1000));
-					}
+					continue;
+				}
+
+				this.activePort = existingPort;
+				this.writeWorkerState(existingWorker!);
+				await this.cleanupManagedButUnhealthyWorkers(portsToTry, knownState, existingPort);
+				await this.cleanupDuplicateWorkers(existingPort, portsToTry);
+				return existingPort;
+			}
+
+			await this.cleanupManagedButUnhealthyWorkers(portsToTry, knownState, null);
+
+			for (var j = 0; j < portsToTry.length; j++)
+			{
+				var port = portsToTry[j];
+				if (await this.isForeignProcessUsingPort(port))
+				{
 					continue;
 				}
 
@@ -166,16 +164,40 @@ export class UpstreamWorkerManager
 					continue;
 				}
 
-				if (await this.waitForReadiness(port, timeoutMs))
+				if (!(await this.waitForReadiness(port, timeoutMs)))
+				{
+					await this.cleanupManagedPortIfNeeded(port, knownState);
+					continue;
+				}
+
+				var startedWorker = await this.getClaudeMemWorkerInfo(port, 1200, 2);
+				if (this.isExpectedWorkerInfo(startedWorker))
 				{
 					this.activePort = port;
+					this.writeWorkerState(startedWorker!);
+					await this.cleanupManagedButUnhealthyWorkers(portsToTry, knownState, port);
+					await this.cleanupDuplicateWorkers(port, portsToTry);
 					return port;
 				}
-			}
-		}
 
-		this.activePort = null;
-		throw new Error(`ClaudeMem worker failed to start on port ${preferredPort}`);
+				var listener = await this.getListeningProcessInfo(port);
+				this.activePort = port;
+				this.writeWorkerState({
+					pid: listener?.pid ?? null,
+					port,
+					workerPath: this.options.scriptPath,
+					version: null,
+					managed: true,
+					status: "ok",
+				});
+				await this.cleanupManagedButUnhealthyWorkers(portsToTry, knownState, port);
+				await this.cleanupDuplicateWorkers(port, portsToTry);
+				return port;
+			}
+
+			this.activePort = null;
+			throw new Error(`ClaudeMem worker failed to start on port ${preferredPort}`);
+		});
 	}
 
 	public async waitUntilReady(timeoutMs: number): Promise<boolean>
@@ -197,6 +219,139 @@ export class UpstreamWorkerManager
 		}
 
 		return candidates;
+	}
+
+	private buildWorkerStateFilePath(scriptPath: string): string
+	{
+		var homeDir = process.env.USERPROFILE ?? process.env.HOME ?? process.cwd();
+		var stateDir = join(homeDir, ".claude-mem", "opencode-worker-state");
+		mkdirSync(stateDir, { recursive: true });
+		var hash = createHash("sha1").update(scriptPath).digest("hex").slice(0, 16);
+		return join(stateDir, `${hash}.json`);
+	}
+
+	private async withStartupLock<T>(action: () => Promise<T>): Promise<T>
+	{
+		var lockAcquired = false;
+		var lockStart = Date.now();
+		while (!lockAcquired)
+		{
+			try
+			{
+				mkdirSync(this.startupLockPath);
+				lockAcquired = true;
+				break;
+			}
+			catch
+			{
+				try
+				{
+					var ageMs = Date.now() - statSync(this.startupLockPath).mtimeMs;
+					if (ageMs > 30000)
+					{
+						rmSync(this.startupLockPath, { recursive: true, force: true });
+						continue;
+					}
+				}
+				catch
+				{
+				}
+
+				if (Date.now() - lockStart > 35000)
+				{
+					throw new Error("Timed out acquiring claude-mem worker startup lock");
+				}
+
+				await new Promise(resolve => setTimeout(resolve, 150));
+			}
+		}
+
+		try
+		{
+			return await action();
+		}
+		finally
+		{
+			if (lockAcquired)
+			{
+				rmSync(this.startupLockPath, { recursive: true, force: true });
+			}
+		}
+	}
+
+	private readWorkerState(): WorkerState | null
+	{
+		if (!existsSync(this.stateFilePath))
+		{
+			return null;
+		}
+
+		try
+		{
+			var raw = readFileSync(this.stateFilePath, "utf8");
+			var parsed = JSON.parse(raw) as WorkerState;
+			if (!parsed || !Number.isInteger(parsed.port) || typeof parsed.workerPath !== "string")
+			{
+				return null;
+			}
+
+			return parsed;
+		}
+		catch
+		{
+			return null;
+		}
+	}
+
+	private writeWorkerState(info: WorkerHealthInfo | WorkerState): void
+	{
+		var state: WorkerState = {
+			pid: info.pid ?? null,
+			port: info.port,
+			workerPath: info.workerPath ?? this.options.scriptPath,
+			version: info.version ?? null,
+			managed: info.managed,
+			updatedAt: Date.now(),
+		};
+
+		writeFileSync(this.stateFilePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+	}
+
+	private clearWorkerState(): void
+	{
+		try
+		{
+			if (existsSync(this.stateFilePath))
+			{
+				unlinkSync(this.stateFilePath);
+			}
+		}
+		catch
+		{
+		}
+	}
+
+	private buildReuseOrder(portsToTry: number[], knownState: WorkerState | null): number[]
+	{
+		var ordered = knownState !== null
+			? [knownState.port, ...portsToTry]
+			: [...portsToTry];
+
+		var unique = new Set<number>();
+		var result: number[] = [];
+		for (var i = 0; i < ordered.length; i++)
+		{
+			var port = ordered[i];
+			if (!Number.isInteger(port) || unique.has(port))
+			{
+				continue;
+			}
+
+			unique.add(port);
+			result.push(port);
+		}
+
+		return result;
 	}
 
 	private async tryStartWorker(port: number): Promise<boolean>
@@ -334,6 +489,72 @@ export class UpstreamWorkerManager
 		return null;
 	}
 
+	private normalizePathForComparison(value: string | null | undefined): string
+	{
+		return (value ?? "").replace(/\\/g, "/").toLowerCase();
+	}
+
+	private isExpectedWorkerInfo(info: WorkerHealthInfo | null): boolean
+	{
+		if (!info)
+		{
+			return false;
+		}
+
+		if (info.status !== "ok" || !info.managed)
+		{
+			return false;
+		}
+
+		return this.normalizePathForComparison(info.workerPath) === this.normalizePathForComparison(this.options.scriptPath);
+	}
+
+	private async getClaudeMemWorkerInfo(port: number, timeoutMs: number, attempts: number): Promise<WorkerHealthInfo | null>
+	{
+		for (var attempt = 0; attempt < attempts; attempt++)
+		{
+			try
+			{
+				var health = await this.fetchJsonWithTimeout(`http://127.0.0.1:${port}/api/health`, timeoutMs);
+				if (!health.ok)
+				{
+					continue;
+				}
+
+				var body = health.body as Record<string, unknown>;
+				var version = typeof body.version === "string" ? body.version : null;
+				if (version === null)
+				{
+					var versionRes = await this.fetchJsonWithTimeout(`http://127.0.0.1:${port}/api/version`, timeoutMs);
+					if (versionRes.ok)
+					{
+						var versionBody = versionRes.body as Record<string, unknown>;
+						version = typeof versionBody.version === "string" ? versionBody.version : null;
+					}
+				}
+
+				return {
+					pid: typeof body.pid === "number" ? body.pid : null,
+					port,
+					workerPath: typeof body.workerPath === "string" ? body.workerPath : null,
+					version,
+					managed: body.managed === true,
+					status: typeof body.status === "string" ? body.status : null,
+				};
+			}
+			catch
+			{
+			}
+
+			if (attempt < attempts - 1)
+			{
+				await new Promise(resolve => setTimeout(resolve, 150 * (attempt + 1)));
+			}
+		}
+
+		return null;
+	}
+
 	private prependRuntimePath(env: NodeJS.ProcessEnv, runtimeDir: string): void
 	{
 		if (!runtimeDir)
@@ -426,35 +647,7 @@ export class UpstreamWorkerManager
 
 	private async isClaudeMemWorker(port: number): Promise<boolean>
 	{
-		try
-		{
-			var readiness = await this.fetchJsonWithTimeout(
-				`http://127.0.0.1:${port}/api/health`,
-				800
-			);
-
-			if (!readiness.ok)
-			{
-				return false;
-			}
-
-			var body = readiness.body as any;
-			if (!body || body.status !== "ok")
-			{
-				return false;
-			}
-
-			var version = await this.fetchJsonWithTimeout(
-				`http://127.0.0.1:${port}/api/version`,
-				800
-			);
-
-			return version.ok && typeof (version.body as any)?.version === "string";
-		}
-		catch
-		{
-			return false;
-		}
+		return this.isExpectedWorkerInfo(await this.getClaudeMemWorkerInfo(port, 800, 2));
 	}
 
 	private async isPortOccupiedByOtherService(port: number): Promise<boolean>
@@ -475,7 +668,7 @@ export class UpstreamWorkerManager
 		}
 		catch
 		{
-			return this.isPortListening(port);
+			return false;
 		}
 	}
 
@@ -501,90 +694,282 @@ export class UpstreamWorkerManager
 
 	private async killProcessOnPort(port: number): Promise<boolean>
 	{
+		var info = await this.getListeningProcessInfo(port);
+		if (!info)
+		{
+			return false;
+		}
+
+		return await this.killProcessByPid(info.pid);
+	}
+
+	private async getListeningProcessInfo(port: number): Promise<ProcessInfo | null>
+	{
 		try
 		{
-			var platform = process.platform;
-			var { execSync } = require('child_process');
-			
-			if (platform === 'win32')
+			if (process.platform === "win32")
 			{
-				// Windows Method 1: netstat + taskkill
 				try
 				{
-					var output = execSync(`netstat -ano | findstr ":${port} " | findstr "LISTENING"`, { encoding: 'utf8', windowsHide: true });
-					var lines = output.trim().split('\n');
-					for (var line of lines)
+					var psCommand = `$conn = Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1; if ($null -eq $conn) { exit 1 }; Get-CimInstance Win32_Process -Filter \"ProcessId = $($conn.OwningProcess)\" | Select-Object ProcessId, CommandLine, CreationDate | ConvertTo-Json -Compress`;
+					var psResult = spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", psCommand], { encoding: "utf8", windowsHide: true });
+					if (!psResult.error && psResult.status === 0 && psResult.stdout.trim().length > 0)
 					{
-						var match = line.trim().match(/(\d+)\s*$/);
-						if (match)
+						var parsed = JSON.parse(psResult.stdout.trim()) as { ProcessId?: number; CommandLine?: string; CreationDate?: string };
+						if (typeof parsed.ProcessId === "number" && parsed.ProcessId > 0)
 						{
-							var pid = match[1];
-							console.log(`[ClaudeMem] Killing process ${pid} on port ${port} (taskkill)`);
-							execSync(`taskkill /F /PID ${pid} /T`, { windowsHide: true });
-							return true;
+							return {
+								pid: parsed.ProcessId,
+								commandLine: typeof parsed.CommandLine === "string" ? parsed.CommandLine : null,
+								createdAt: typeof parsed.CreationDate === "string" ? parsed.CreationDate : null,
+							};
 						}
 					}
 				}
 				catch
 				{
-					// Try PowerShell method
 				}
 
-				// Windows Method 2: PowerShell Get-NetTCPConnection + Stop-Process
 				try
 				{
-					var psCmd = `powershell -Command "Get-NetTCPConnection -LocalPort ${port} -State Listen | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }"`;
-					console.log(`[ClaudeMem] Attempting to kill process on port ${port} (PowerShell)`);
-					execSync(psCmd, { stdio: 'ignore', windowsHide: true });
-					return true;
-				}
-				catch
-				{
-					// Try WMIC method
-				}
-
-				// Windows Method 3: WMIC
-				try
-				{
-					var wmicOutput = execSync(`wmic process where "commandline like '%claude-mem%'" get processid`, { encoding: 'utf8', windowsHide: true });
-					var pids = wmicOutput.split('\n').slice(1).map((s: string) => s.trim()).filter((s: string) => s && !isNaN(parseInt(s)));
-					for (var pid of pids)
+					var output = spawnSync("cmd", ["/c", `netstat -ano | findstr ":${port} " | findstr "LISTENING"`], { encoding: "utf8", windowsHide: true });
+					if (!output.error && output.status === 0)
 					{
-						console.log(`[ClaudeMem] Killing claude-mem process ${pid} (WMIC)`);
-						execSync(`wmic process ${pid} delete`, { stdio: 'ignore', windowsHide: true });
+						var lines = output.stdout.trim().split(/\r?\n/);
+						for (var i = 0; i < lines.length; i++)
+						{
+							var match = lines[i].trim().match(/(\d+)\s*$/);
+							if (!match)
+							{
+								continue;
+							}
+
+							var pid = parseInt(match[1], 10);
+							if (!Number.isInteger(pid) || pid <= 0)
+							{
+								continue;
+							}
+
+							return {
+								pid,
+								commandLine: await this.getProcessCommandLine(pid),
+								createdAt: null,
+							};
+						}
 					}
-					if (pids.length > 0) return true;
 				}
 				catch
 				{
-					// All methods failed
 				}
 			}
 			else
 			{
-				// Unix/Mac: use lsof
 				try
 				{
-					var output = execSync(`lsof -ti:${port}`, { encoding: 'utf8', windowsHide: true });
-					var pid = output.trim();
-					if (pid)
+					var unixOutput = spawnSync("lsof", ["-ti", `:${port}`], { encoding: "utf8", windowsHide: true });
+					var pidValue = unixOutput.stdout.trim();
+					if (pidValue)
 					{
-						console.log(`[ClaudeMem] Killing process ${pid} on port ${port}`);
-						execSync(`kill -9 ${pid}`, { windowsHide: true });
-						return true;
+						var unixPid = parseInt(pidValue, 10);
+						if (Number.isInteger(unixPid) && unixPid > 0)
+						{
+							return {
+								pid: unixPid,
+								commandLine: await this.getProcessCommandLine(unixPid),
+								createdAt: null,
+							};
+						}
 					}
 				}
 				catch
 				{
-					// Process not found or kill failed
 				}
 			}
 		}
-		catch (e)
+		catch
 		{
-			console.error(`[ClaudeMem] Failed to kill process on port ${port}:`, e);
 		}
-		return false;
+
+		return null;
+	}
+
+	private async getProcessCommandLine(pid: number): Promise<string | null>
+	{
+		try
+		{
+			if (process.platform === "win32")
+			{
+				var psCommand = `(Get-CimInstance Win32_Process -Filter \"ProcessId = ${pid}\").CommandLine | Out-String`;
+				var result = spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", psCommand], { encoding: "utf8", windowsHide: true });
+				if (!result.error && result.status === 0)
+				{
+					var commandLine = result.stdout.trim();
+					return commandLine.length > 0 ? commandLine : null;
+				}
+			}
+			else
+			{
+				var unixResult = spawnSync("ps", ["-p", String(pid), "-o", "command="], { encoding: "utf8", windowsHide: true });
+				if (!unixResult.error && unixResult.status === 0)
+				{
+					var unixCommandLine = unixResult.stdout.trim();
+					return unixCommandLine.length > 0 ? unixCommandLine : null;
+				}
+			}
+		}
+		catch
+		{
+		}
+
+		return null;
+	}
+
+	private isManagedWorkerProcessInfo(info: ProcessInfo | null, knownState: WorkerState | null): boolean
+	{
+		if (!info)
+		{
+			return false;
+		}
+
+		if (knownState !== null && knownState.pid === info.pid)
+		{
+			return true;
+		}
+
+		var commandLine = this.normalizePathForComparison(info.commandLine);
+		return commandLine.includes(this.normalizePathForComparison(this.options.scriptPath))
+			&& commandLine.includes("opencode-daemon");
+	}
+
+	private async killProcessByPid(pid: number): Promise<boolean>
+	{
+		try
+		{
+			if (process.platform === "win32")
+			{
+				spawnSync("taskkill", ["/F", "/PID", String(pid), "/T"], { windowsHide: true, stdio: "ignore" });
+			}
+			else
+			{
+				spawnSync("kill", ["-9", String(pid)], { windowsHide: true, stdio: "ignore" });
+			}
+
+			return true;
+		}
+		catch
+		{
+			return false;
+		}
+	}
+
+	private async isForeignProcessUsingPort(port: number): Promise<boolean>
+	{
+		var worker = await this.getClaudeMemWorkerInfo(port, 800, 1);
+		if (this.isExpectedWorkerInfo(worker))
+		{
+			return false;
+		}
+
+		var listener = await this.getListeningProcessInfo(port);
+		if (!listener)
+		{
+			return false;
+		}
+
+		var knownState = this.readWorkerState();
+		return !this.isManagedWorkerProcessInfo(listener, knownState);
+	}
+
+	private async cleanupManagedPortIfNeeded(port: number, knownState: WorkerState | null): Promise<void>
+	{
+		var listener = await this.getListeningProcessInfo(port);
+		if (!this.isManagedWorkerProcessInfo(listener, knownState))
+		{
+			return;
+		}
+
+		if (listener === null)
+		{
+			return;
+		}
+
+		console.log(`[ClaudeMem] Cleaning up failed managed worker on port ${port} (PID ${listener.pid})`);
+		await this.killProcessByPid(listener.pid);
+		if (knownState !== null && knownState.pid === listener.pid)
+		{
+			this.clearWorkerState();
+		}
+		await new Promise(resolve => setTimeout(resolve, 500));
+	}
+
+	private async cleanupManagedButUnhealthyWorkers(ports: number[], knownState: WorkerState | null, activePort: number | null): Promise<void>
+	{
+		for (var i = 0; i < ports.length; i++)
+		{
+			var port = ports[i];
+			if (activePort !== null && port === activePort)
+			{
+				continue;
+			}
+
+			var worker = await this.getClaudeMemWorkerInfo(port, 800, 1);
+			if (this.isExpectedWorkerInfo(worker))
+			{
+				continue;
+			}
+
+			var listener = await this.getListeningProcessInfo(port);
+			if (!this.isManagedWorkerProcessInfo(listener, knownState))
+			{
+				continue;
+			}
+
+			if (listener === null)
+			{
+				continue;
+			}
+
+			console.log(`[ClaudeMem] Reaping stale managed worker on port ${port} (PID ${listener.pid})`);
+			await this.killProcessByPid(listener.pid);
+			await new Promise(resolve => setTimeout(resolve, 500));
+		}
+
+		var refreshedState = this.readWorkerState();
+		if (refreshedState !== null)
+		{
+			var refreshedWorker = await this.getClaudeMemWorkerInfo(refreshedState.port, 800, 1);
+			if (!this.isExpectedWorkerInfo(refreshedWorker))
+			{
+				this.clearWorkerState();
+			}
+		}
+	}
+
+	private async cleanupDuplicateWorkers(activePort: number, ports: number[]): Promise<void>
+	{
+		for (var i = 0; i < ports.length; i++)
+		{
+			var port = ports[i];
+			if (port === activePort)
+			{
+				continue;
+			}
+
+			var worker = await this.getClaudeMemWorkerInfo(port, 800, 1);
+			if (!this.isExpectedWorkerInfo(worker))
+			{
+				continue;
+			}
+
+			if (worker === null || worker.pid === null)
+			{
+				continue;
+			}
+
+			console.log(`[ClaudeMem] Reaping duplicate managed worker on port ${port} (PID ${worker.pid})`);
+			await this.killProcessByPid(worker.pid);
+			await new Promise(resolve => setTimeout(resolve, 500));
+		}
 	}
 
 	private async waitForReadiness(port: number, timeoutMs: number): Promise<boolean>

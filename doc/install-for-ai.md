@@ -127,7 +127,12 @@ node install-upstream.cjs --tag v10.0.1
   "$schema": "https://opencode.ai/config.json",
   "plugin": [
     "./.opencode/plugins/claude-mem-for-opencode"
-  ]
+  ],
+  "command": {
+    "restart-worker": {
+      "template": "powershell -NoProfile -ExecutionPolicy Bypass -File \".opencode/plugins/claude-mem-for-opencode/commands/restart-worker.ps1\""
+    }
+  }
 }
 ```
 
@@ -137,6 +142,16 @@ node install-upstream.cjs --tag v10.0.1
 
 ```json
 "./.opencode/plugins/claude-mem-for-opencode"
+```
+
+并确保存在以下命令配置（用于安全重启 Worker）：
+
+```json
+"command": {
+  "restart-worker": {
+    "template": "powershell -NoProfile -ExecutionPolicy Bypass -File \".opencode/plugins/claude-mem-for-opencode/commands/restart-worker.ps1\""
+  }
+}
 ```
 
 ---
