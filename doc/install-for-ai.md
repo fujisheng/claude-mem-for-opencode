@@ -141,7 +141,46 @@ node install-upstream.cjs --tag v10.0.1
 
 ---
 
-### 步骤 6：验证配置
+### 步骤 6：安装 mem-search 技能
+
+插件自带 `mem-search` 技能，用于指导 AI 高效使用记忆系统。需要将其拷贝到技能目录。
+
+**6.1 检查技能目录是否存在**
+
+```bash
+# 项目级技能目录
+mkdir -p .opencode/skills
+
+# 全局技能目录（可选，如需跨项目使用）
+mkdir -p ~/.config/opencode/skills
+```
+
+**6.2 拷贝技能到项目级目录**
+
+```bash
+# 将 mem-search 技能拷贝到项目技能目录
+cp -r .opencode/plugins/claude-mem-for-opencode/skill/mem-search .opencode/skills/
+```
+
+**6.3 （可选）拷贝到全局目录**
+
+如需在所有项目中使用此技能：
+
+```bash
+cp -r .opencode/plugins/claude-mem-for-opencode/skill/mem-search ~/.config/opencode/skills/
+```
+
+**6.4 验证技能已安装**
+
+```bash
+ls .opencode/skills/mem-search/SKILL.md
+```
+
+应显示文件路径，表示安装成功。
+
+---
+
+### 步骤 7：验证配置
 
 检查 `opencode.json` 是否有效：
 
@@ -149,13 +188,15 @@ node install-upstream.cjs --tag v10.0.1
 - 确保路径 `./.opencode/plugins/claude-mem-for-opencode` 存在
 - 确保 `dist/index.js` 已生成（说明构建步骤已执行）
 
-### 步骤 7：最终验证
+### 步骤 8：最终验证
 
 验证以下文件是否存在：
 
 - ✅ `.opencode/plugins/claude-mem-for-opencode/dist/index.js` (编译后的插件入口)
 - ✅ `.opencode/plugins/claude-mem-for-opencode/src/index.ts` (插件源码)
 - ✅ `.opencode/plugins/claude-mem-for-opencode/vendor/claude-mem/plugin/scripts/worker-service.cjs` (Worker 服务)
+- ✅ `.opencode/plugins/claude-mem-for-opencode/skill/mem-search/SKILL.md` (mem-search 技能源文件)
+- ✅ `.opencode/skills/mem-search/SKILL.md` (已安装的技能)
 - ✅ `opencode.json` (OpenCode 主配置，包含 plugin 路径)
 
 ---
@@ -170,16 +211,23 @@ node install-upstream.cjs --tag v10.0.1
 📦 已安装组件：
    • 上游代码 (claude-mem v10.0.1)
    • OpenCode 插件适配层
+   • mem-search 技能（记忆检索助手）
 
 ⚙️ 配置位置：
    • opencode.json - OpenCode 主配置
    • ~/.claude-mem/ - 数据存储目录
+   • .opencode/skills/mem-search/ - 记忆检索技能
 
 🚀 使用方法：
    • search(query="关键词") - 搜索记忆
    • save_memory(text="内容", title="标题") - 手动保存
    • timeline(anchor=ID) - 查看上下文
    • get_observations(ids=[ID]) - 获取详情
+
+📚 mem-search 技能：
+   • 当你说"之前"、"上次"、"继续上次"等关键词时
+   • AI 会自动加载此技能并搜索历史记忆
+   • 使用 3 层检索模式节省 token
 
 ⚠️  重要：需要重启 OpenCode 才能生效！
    请关闭当前会话并重新启动。
@@ -204,7 +252,10 @@ npm run build
 cd doc
 node install-upstream.cjs --tag v10.0.2  # 替换为最新版本
 
-# 4. 通知用户重启
+# 4. 更新技能（如有更新）
+cp -r ../skill/mem-search ../../../skills/mem-search/
+
+# 5. 通知用户重启
 echo "✅ 更新完成！请重启 OpenCode 以使用新版本。"
 ```
 
@@ -357,6 +408,6 @@ bun --version
 
 ---
 
-**版本**：2.1.0
-**更新日期**：2026-02-11
+**版本**：2.2.0
+**更新日期**：2026-03-18
 **兼容**：OpenCode >= 1.0, claude-mem >= 10.0, Bun >= 1.0
